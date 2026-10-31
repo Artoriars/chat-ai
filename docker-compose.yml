@@ -1,0 +1,56 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: chatbi-mysql
+    env_file: .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CHATBI_DB_PASSWORD}
+      MYSQL_DATABASE: chatbi_meta
+      TZ: Asia/Shanghai
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "--password=$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # M2 起使用：pgvector 检索 + LangGraph checkpointer
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: chatbi-postgres
+    env_file: .env
+    environment:
+      POSTGRES_PASSWORD: ${CHATBI_PG_PASSWORD}
+      TZ: Asia/Shanghai
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # M3 起使用：Excel 异步导出任务队列 / 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: chatbi-redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  mysql_data:
+  postgres_data:
+  redis_data:

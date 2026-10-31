@@ -1,0 +1,33 @@
+[project]
+name = "chatbi-backend"
+version = "0.1.0"
+description = "Chat BI backend (M1: schema collect -> NL2SQL -> secure execute)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+    "langgraph>=0.2",
+    "sqlalchemy>=2.0",
+    "pymysql>=1.1",
+    "cryptography>=42",        # pymysql 连 MySQL8.4 caching_sha2_password 必需
+    "sqlglot>=25",
+    "pydantic-settings>=2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
