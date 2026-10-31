@@ -55,6 +55,20 @@ def test_order_by_select_alias_passes():
     assert "LIMIT 50" in out.upper()
 
 
+def test_derived_table_alias_passes():
+    """派生表（FROM (SELECT...) t）的输出列引用应放行（真实多轮对话案例）。"""
+    out = check(
+        "SELECT t.user_id, u.username, DATE_FORMAT(o.pay_time, '%Y-%m') AS order_month, "
+        "SUM(o.pay_amount) AS monthly_amount "
+        "FROM (SELECT user_id, SUM(pay_amount) AS total_amount FROM orders "
+        "      WHERE status = 'PAID' GROUP BY user_id ORDER BY total_amount DESC LIMIT 5) t "
+        "INNER JOIN users u ON u.id = t.user_id "
+        "INNER JOIN orders o ON o.user_id = t.user_id AND o.status = 'PAID' "
+        "GROUP BY t.user_id, u.username, order_month"
+    )
+    assert "LIMIT 50" in out.upper()
+
+
 # ---- 危险操作拒绝 ----
 @pytest.mark.parametrize(
     "sql",

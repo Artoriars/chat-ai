@@ -8,16 +8,21 @@ from sqlalchemy.engine import Engine
 from app.models import column_meta, table_meta
 
 
-def build_schema_prompt(meta_engine: Engine, datasource_id: int = 1) -> str:
-    """按表分组生成 DDL；无数据时抛错（提示先执行采集）。"""
+def build_schema_prompt(meta_engine: Engine, datasource_id: int = 1, only_tables: set[str] | None = None) -> str:
+    """按表分组生成 DDL；only_tables 限定子集（检索/权限过滤后）；无数据时抛错。"""
     with meta_engine.connect() as conn:
-        tables = conn.execute(
+        stmt = (
             select(table_meta.c.id, table_meta.c.table_name, table_meta.c.table_comment)
             .where(table_meta.c.datasource_id == datasource_id)
             .order_by(table_meta.c.table_name)
-        ).all()
+        )
+        tables = conn.execute(stmt).all()
         if not tables:
             raise ValueError("元数据库为空，请先调用 POST /api/schema/collect 采集表结构")
+        if only_tables is not None:
+            tables = [t for t in tables if t.table_name in only_tables]
+            if not tables:
+                raise ValueError("过滤后无可用表（检查检索结果与用户权限）")
 
         cols = conn.execute(
             select(

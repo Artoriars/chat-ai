@@ -118,7 +118,7 @@ def upsert_schema(
 
 
 def collect(datasource_id: int = 1) -> dict[str, Any]:
-    """完整采集入口：业务库读取 → 元库落库。"""
+    """完整采集入口：业务库读取 → 元库落库 → 表卡片向量索引（embedding 可用时）。"""
     # 延迟导入避免测试环境下 db 模块依赖 .env
     from app.db import get_business_engine, get_meta_engine
 
@@ -129,5 +129,47 @@ def collect(datasource_id: int = 1) -> dict[str, Any]:
     with get_meta_engine().begin() as meta_conn:
         stats = upsert_schema(meta_conn, datasource_id, tables, columns)
 
+    stats["index"] = index_cards(datasource_id)
     logger.info("schema collected: %s", stats)
     return {**stats, "schema_changed": True}
+
+
+def index_cards(datasource_id: int = 1) -> dict[str, Any]:
+    """表卡片向量索引：全量重建（表数量少，增量 diff 是 M3 范围）。embedding 未配置则跳过。"""
+    from app.db import get_meta_engine
+    from app.embedder import get_embedder
+    from app.pgstore import upsert_cards
+    from app.prompt import build_schema_prompt
+
+    embedder = get_embedder()
+    if not embedder.enabled:
+        return {"skipped": "embedding 未配置"}
+
+    ddl = build_schema_prompt(get_meta_engine(), datasource_id)
+    chunks = [c.strip() for c in ddl.split("\n\n") if c.strip()]
+    # build_schema_prompt 按 table_name 排序输出，块顺序与元库表名顺序一致
+    from sqlalchemy import text as _text
+
+    with get_meta_engine().connect() as conn:
+        table_names = [
+            r[0]
+            for r in conn.execute(
+                _text("SELECT table_name FROM table_meta WHERE datasource_id = :d ORDER BY table_name"),
+                {"d": datasource_id},
+            ).all()
+        ]
+    if len(table_names) != len(chunks):
+        return {"skipped": f"卡片数与表数不一致（{len(chunks)} vs {len(table_names)}），跳过索引"}
+
+    vectors = embedder.embed_documents(chunks)
+    rows = [
+        {
+            "datasource_id": datasource_id,
+            "table_name": t,
+            "card_text": c,
+            "embedding": v,
+        }
+        for t, c, v in zip(table_names, chunks, vectors)
+    ]
+    upsert_cards(rows, dim=len(vectors[0]))
+    return {"indexed_tables": len(rows), "dim": len(vectors[0])}

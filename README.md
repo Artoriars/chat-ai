@@ -54,7 +54,12 @@
 ### MVP 分期
 
 - **M1（已落地）**：schema 手动触发采集（information_schema → chatbi_meta）→ 全量 schema DDL 进 prompt（演示库表少，不建检索）→ LangGraph 流水线（generate → validate → execute → summarize）→ 返回 SQL + 数据集前 50 行 + 摘要。validate = sqlglot MySQL 方言解析 + 只允许单条 SELECT + 表/列存在性 + LIMIT 注入/钳制；execute 前 EXPLAIN rows 估算超阈值拒绝。后端 API 先行，UI 后置。
-- **M2**：pgvector 表卡片检索 + join 图扩展替换全量 prompt；metric 口径别名命中硬约束注入；多轮会话（Postgres checkpointer + rewrite 三合一节点）；权限预裁剪。
+- **M2（已落地，2026-10-31）**：
+  - pgvector 表卡片检索 + join 图扩展（列名 `<x>_id` 约定推导关联边，1 跳 BFS），embedding 未配置时自动降级全量 schema；`chat-bi/.env` 配 `EMBEDDING_*` 后 `POST /api/schema/collect` 即建索引；
+  - 口径硬约束：metric 别名确定性匹配（`status='active'` 才参与），命中即注入规范表达式 + base_filter，LLM 禁止改写；
+  - 多轮会话：PostgresSaver checkpointer（与 pgvector 共用连接池），rewrite 三合一节点（指代消解 rewritten_query / is_new_topic 工作集重置 / output_signal 输出信号）；`POST /api/chat` 传 `session_id` 续聊；
+  - 权限预裁剪：`user`（grant_all_tables）+ `user_table_permission`，API `X-User-Id` 头（默认 1=全量授权），检索与 validate 共用权限来源；
+  - 实施期修复：派生表别名（`FROM (SELECT...) t`）与 CTE 同等放行；checkpointer 持久化失败状态污染后续轮次 → rewrite 节点每轮开局清空 error 标记；PostgresSaver.setup 需连接池 autocommit（CONCURRENTLY 索引限制）。
 - **M3**：幻觉自愈 bounded 重试 + clarify 降级追问（LangGraph interrupt）；输出路由（结论/明细/Excel 异步导出走 Redis 队列）；schema 增量 diff（定时 + query-time 兜底刷新）；LangSmith datasets 回归评估。
 
 ### 基础设施（docker-compose）

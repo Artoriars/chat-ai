@@ -107,6 +107,13 @@ def parse_and_check(
         if t.name not in cte_names:
             tables.add(t.name)
 
+    # 派生表别名（FROM (SELECT ...) t）：输出列静态不可推断，与 CTE 同等放行
+    opaque_names = set(cte_names)
+    for sq in root.find_all(exp.Subquery):
+        if sq.alias:
+            opaque_names.add(sq.alias)
+            alias_map[sq.alias] = sq.alias
+
     unknown = tables - set(valid_tables)
     if unknown:
         raise SecurityError(
@@ -129,8 +136,8 @@ def parse_and_check(
             resolved = alias_map.get(col.table)
             if resolved is None:
                 raise SecurityError("UNKNOWN_QUALIFIER", f"未知的表别名或表名: {col.table}")
-            if resolved in cte_names:
-                continue  # CTE 输出列无法静态推断，M1 放行
+            if resolved in opaque_names:
+                continue  # CTE / 派生表输出列无法静态推断，放行
             if col.name not in valid_tables[resolved]:
                 raise SecurityError(
                     "UNKNOWN_COLUMN",

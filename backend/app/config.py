@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     default_row_limit: int = 50
     max_row_limit: int = 1000
 
+    # M2: embedding（不配则检索降级为全量 schema）
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
+
+    # M2: LangGraph checkpointer / 检索参数
+    chatbi_pg_dsn: str = ""
+    retrieve_top_k: int = 8
+    max_context_tables: int = 12
+
 
 @lru_cache
 def get_settings() -> Settings:
