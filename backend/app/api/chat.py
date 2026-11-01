@@ -24,7 +24,12 @@ def chat(req: ChatRequest, x_user_id: int = Header(default=1)) -> dict:
     session_id = req.session_id or uuid.uuid4().hex
     state = get_chat_graph().invoke(
         {"question": req.question.strip(), "user_id": x_user_id, "session_id": session_id},
-        config={"configurable": {"thread_id": session_id}},
+        config={
+            "configurable": {"thread_id": session_id},
+            # LangSmith run 元数据：trace 列表按会话/用户过滤
+            "metadata": {"session_id": session_id, "user_id": x_user_id},
+            "run_name": "chat-turn",
+        },
     )
     if state.get("error_code"):
         return {
