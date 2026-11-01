@@ -103,6 +103,11 @@ echo '{"question": "查一下订单金额最高的前 5 个用户及其大区"}'
 curl -X POST http://localhost:8600/api/chat -H "Content-Type: application/json" -d @/tmp/q.json
 ```
 
+### UI
+
+启动 uvicorn 后浏览器打开 `http://localhost:8600/` 即对话界面（FastAPI 直接托管 `app/static/`，无前端构建步骤）：
+多会话（localStorage 持久化）、clarify 快捷选项点选、分析结论卡片、SQL 折叠查看、一键导出 Excel（轮询任务状态后给下载链接）、自愈重试徽标、用户 ID 切换（X-User-Id）。
+
 ### 后端目录
 
 ```
@@ -119,6 +124,7 @@ backend/
 │   ├── api/                  # /api/schema/collect|refresh、/api/chat、/api/export
 │   ├── exporter.py           # M3: Excel 导出（Redis 队列 + 进程内 worker）
 │   ├── qa_store.py           # M3: question-SQL 对沉淀（LangSmith dataset + 去重）
+│   ├── static/               # UI：原生 HTML/CSS/JS 单页（无构建工具链，FastAPI 托管）
 │   └── graph/                # LangGraph：state / nodes（含 repair/clarify）/ build
 ├── scripts/run_eval.py       # M3: LangSmith dataset 回归评估（手动执行）
 └── tests/                    # security、collector 单测（sqlite 内存库隔离）

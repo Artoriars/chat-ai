@@ -57,3 +57,9 @@ app.include_router(export.router, prefix="/api")
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+# UI 静态页必须挂在所有 API 路由之后（Starlette 按注册顺序匹配，根挂载会吞掉后注册的路由）
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+app.mount("/", StaticFiles(directory=str(Path(__file__).resolve().parent / "static"), html=True), name="ui")

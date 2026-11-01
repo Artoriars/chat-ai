@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat BI · 智能对话式 BI 平台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%23a855f7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='2' y='2' width='28' height='28' rx='8' fill='url(%23g)'/%3E%3Cpath d='M16 7l2.2 5.6L24 15l-5.8 2.4L16 23l-2.2-5.6L8 15l5.8-2.4z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- ===== 侧边栏：品牌 / 会话列表 / 用户与状态 ===== -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-logo">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l2 5.1L19 10l-5 1.9L12 17l-2-5.1L5 10l5-1.9z" fill="currentColor"/><circle cx="18.5" cy="18.5" r="2.5" fill="currentColor" opacity=".55"/></svg>
+      </div>
+      <div class="brand-text">
+        <h1>Chat BI</h1>
+        <p>智能对话式 BI 平台</p>
+      </div>
+    </div>
+
+    <button id="newChatBtn" class="btn-new" title="开始一个新对话">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      新对话
+    </button>
+
+    <nav id="sessionList" aria-label="历史会话"></nav>
+
+    <div class="sidebar-foot">
+      <label class="uid-row">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M4.5 20c1.2-3.2 4-5 7.5-5s6.3 1.8 7.5 5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+        用户 ID
+        <input id="userIdInput" type="number" min="1" step="1" value="1" title="X-User-Id 请求头（权限预裁剪用）">
+      </label>
+      <div class="health">
+        <span id="healthDot" class="dot"></span>
+        <span id="healthText">连接中…</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区：顶栏 / 消息流 / 输入区 ===== -->
+  <main id="main">
+    <header id="topbar">
+      <h2 id="convTitle">新对话</h2>
+      <span id="convMeta"></span>
+    </header>
+
+    <div id="messages">
+      <div id="emptyState">
+        <div class="es-logo">
+          <svg viewBox="0 0 24 24"><path d="M12 2.5l2.3 5.9 5.9 2.3-5.9 2.3L12 18.9l-2.3-5.9-5.9-2.3 5.9-2.3z" fill="currentColor"/></svg>
+        </div>
+        <h3>今天想看点什么数据？</h3>
+        <p>用自然语言提问，我来生成 SQL、安全校验并执行</p>
+        <div class="es-suggestions">
+          <button data-q="查一下订单金额最高的前 5 个用户及其大区">订单金额 Top 5 用户</button>
+          <button data-q="分析一下各区域的销售情况">各区域销售分析</button>
+          <button data-q="帮我看看销售数据">（试试含糊提问 → 追问）</button>
+          <button data-q="华东区近期的订单量怎么样？">华东区订单量</button>
+        </div>
+      </div>
+    </div>
+
+    <footer id="composer">
+      <div class="composer-box">
+        <textarea id="input" rows="1" placeholder="用自然语言提问，例如：查一下订单金额最高的前 5 个用户…"></textarea>
+        <button id="sendBtn" title="发送" disabled>
+          <svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.5-8.4a.7.7 0 000-1.3L3.4 2.3a.7.7 0 00-1 .8L4.6 10c.1.4.4.7.8.8l7.7 1.1-7.7 1.1c-.4.1-.7.4-.8.8l-2.2 6.9a.7.7 0 001 .7z" fill="currentColor"/></svg>
+        </button>
+      </div>
+      <p class="hint">Enter 发送 · Shift+Enter 换行 · 查询结果默认预览前 50 行，可一键导出 Excel</p>
+    </footer>
+  </main>
+</div>
+
+<div id="toast" role="alert"></div>
+<script src="app.js"></script>
+</body>
+</html>
