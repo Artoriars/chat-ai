@@ -153,6 +153,14 @@ def rewrite_node(state: ChatState) -> ChatState:
 
 
 def retrieve_node(state: ChatState) -> ChatState:
+    try:
+        return _retrieve_impl(state)
+    except Exception as e:
+        logger.exception("retrieve failed")
+        return {"error_code": "RETRIEVE_ERROR", "error": f"检索失败: {e}"}
+
+
+def _retrieve_impl(state: ChatState) -> ChatState:
     settings = get_settings()
     allowed = allowed_tables(get_meta_engine(), state.get("user_id", 1))
     if allowed is not None and not allowed:

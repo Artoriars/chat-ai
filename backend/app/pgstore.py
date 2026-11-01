@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS table_card (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (datasource_id, table_name)
 );
-CREATE INDEX IF NOT EXISTS idx_table_card_emb ON table_card USING hnsw (embedding vector_cosine_ops);
+-- 不建 HNSW 索引：pgvector 索引上限 2000 维，而主流 embedding 模型常见 2048~3072 维；
+-- 表卡片量级（≤ 数千行）顺序扫描足够，真到亿级再换支持高维的方案
 """
 
 # 自记维度元数据，避免依赖 pgvector typmod 内部约定

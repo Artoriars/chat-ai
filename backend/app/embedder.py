@@ -23,6 +23,9 @@ class Embedder:
             base_url=s.embedding_base_url,
             api_key=s.embedding_api_key,
             timeout=30,
+            # 关键：默认会 tiktoken 预切分成 token 数组再发请求（OpenAI 官方专属行为），
+            # OpenAI 兼容网关只接受字符串 input，必须关闭
+            check_embedding_ctx_length=False,
         )
 
     def embed_query(self, text: str) -> list[float]:
