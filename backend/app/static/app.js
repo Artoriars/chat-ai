@@ -356,6 +356,24 @@ function pushMsg(m) {
 
 /* ---------- Excel 导出（入队 + 轮询状态） ---------- */
 
+async function triggerDownload(url, filename) {
+  /* blob 方式触发浏览器下载：跨过弹出式链接点击的自动下载限制 */
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+  } catch (e) {
+    toast("下载失败：" + e.message);
+  }
+}
+
 async function exportFlow(sessionId, btn) {
   if (!sessionId) return toast("缺少会话 ID，无法导出");
   btn.disabled = true;
@@ -380,8 +398,10 @@ async function exportFlow(sessionId, btn) {
           const a = document.createElement("a");
           a.className = "btn-export";
           a.href = `/api/export/${jobId}/download`;
-          a.textContent = `下载 Excel（${sj.rows} 行${sj.truncated ? "，已截断" : ""}）`;
+          a.textContent = `重新下载 Excel（${sj.rows} 行${sj.truncated ? "，已截断" : ""}）`;
           btn.replaceWith(a);
+          // 主动触发一次下载（replaceWith 只换出链接，不会自动下载）
+          triggerDownload(a.href, `chatbi-export-${jobId.slice(0, 8)}.xlsx`);
         } else if (sj.state === "failed") {
           clearInterval(poll);
           toast("导出失败：" + (sj.error || "未知原因"));
