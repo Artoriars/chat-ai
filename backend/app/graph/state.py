@@ -11,6 +11,7 @@ class TurnRecord(TypedDict, total=False):
     rewritten: str
     sql: str
     error_code: str
+    clarify: str  # clarify 轮的追问文案（用户回答自然成为下一轮 question）
 
 
 class ChatState(TypedDict, total=False):
@@ -31,6 +32,14 @@ class ChatState(TypedDict, total=False):
     sql: str
     error_code: str
     error: str
+    # 自愈重试（本轮临时上下文，不进会话 history）
+    retry_count: int
+    repair_feedback: str
+    # clarify 追问
+    clarify_question: str
+    clarify_options: list[str]
+    # 输出路由
+    conclusion: str
     columns: list[str]
     rows: list[list[Any]]
     row_count: int

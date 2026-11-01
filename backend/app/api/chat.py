@@ -38,6 +38,18 @@ def chat(req: ChatRequest, x_user_id: int = Header(default=1)) -> dict:
             "error_code": state["error_code"],
             "error": state["error"],
             "sql": state.get("sql"),
+            # 自愈消耗的修复次数（0 = 一次成功，便于观测自愈健康度）
+            "retry_count": state.get("retry_count", 0),
+        }
+    # clarify 轮：无 SQL 无数据，返回追问与快捷选项，用户回答走下一轮正常 chat
+    if state.get("output_signal") == "clarify":
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "output_signal": "clarify",
+            "clarify_question": state.get("clarify_question"),
+            "clarify_options": state.get("clarify_options", []),
+            "rewritten_query": state.get("rewritten_query"),
         }
     return {
         "ok": True,
@@ -51,5 +63,8 @@ def chat(req: ChatRequest, x_user_id: int = Header(default=1)) -> dict:
         "columns": state["columns"],
         "rows": state["rows"],
         "row_count": state["row_count"],
+        # output_signal ∈ {conclusion, both} 时的分析结论（dataset 时空串）
+        "conclusion": state.get("conclusion", ""),
+        "retry_count": state.get("retry_count", 0),
         "digest": state["digest"],
     }

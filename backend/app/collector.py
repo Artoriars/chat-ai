@@ -118,24 +118,76 @@ def upsert_schema(
 
 
 def collect(datasource_id: int = 1) -> dict[str, Any]:
-    """完整采集入口：业务库读取 → 元库落库 → 表卡片向量索引（embedding 可用时）。"""
-    # 延迟导入避免测试环境下 db 模块依赖 .env
+    """完整采集入口 = 全量 diff（M3 起与 refresh_tables 同一实现）。"""
+    stats = refresh_tables(datasource_id, None)
+    stats["schema_changed"] = stats["changed"] > 0
+    logger.info("schema collected: %s", stats)
+    return stats
+
+
+def refresh_tables(datasource_id: int, table_names: list[str] | None = None) -> dict[str, Any]:
+    """增量 diff：只对 schema_hash 变化的表（含新增）更新元库并重嵌入表卡片。
+
+    - table_names=None 全量 diff（定时调度）；传列表 = 定向刷新（手动单表 / query-time 兜底）。
+    - 无变化零下游动作（不调 embedding API、不写库）。
+    - 业务库已删除的表原样保留，仅 log warning（原型阶段不归档）。
+    """
+    from sqlalchemy import select
+
+    from app.models import table_meta
     from app.db import get_business_engine, get_meta_engine
 
     tables, columns = read_schema(get_business_engine())
-    if not tables:
-        raise ValueError("业务库未发现任何基表，请确认 BUSINESS_DB_URL 指向的业务库已初始化")
+    if table_names is not None:
+        wanted = set(table_names)
+        tables = [t for t in tables if t["table_name"] in wanted]
+        missing = wanted - {t["table_name"] for t in tables}
+        if missing:
+            logger.warning("refresh: 业务库中不存在待刷新表 %s（已忽略）", sorted(missing))
 
+    columns_by_table: dict[str, list[dict[str, Any]]] = {}
+    for col in columns:
+        columns_by_table.setdefault(col["table_name"], []).append(col)
+
+    # 现存 hash → 找出变更表（新增表的 hash 查不到，自然落入变更集）
+    with get_meta_engine().connect() as conn:
+        rows = conn.execute(
+            select(table_meta.c.table_name, table_meta.c.schema_hash).where(
+                table_meta.c.datasource_id == datasource_id
+            )
+        ).all()
+    known_hash = {r.table_name: r.schema_hash for r in rows}
+
+    changed_tables: list[dict[str, Any]] = []
+    for tbl in tables:
+        tname = tbl["table_name"]
+        new_hash = _table_hash(columns_by_table.get(tname, []))
+        if known_hash.get(tname) == new_hash:
+            continue
+        tbl["_columns"] = columns_by_table.get(tname, [])
+        changed_tables.append(tbl)
+
+    stats: dict[str, Any] = {
+        "scanned": len(tables),
+        "changed": 0,
+        "changed_tables": [],
+        "index": {"skipped": "无变更"},
+    }
+    if not changed_tables:
+        return stats
+
+    # 仅变更表走 upsert（列级全删重插）+ 定向重嵌入
     with get_meta_engine().begin() as meta_conn:
-        stats = upsert_schema(meta_conn, datasource_id, tables, columns)
+        upsert_schema(meta_conn, datasource_id, changed_tables,
+                      [dict(c) for t in changed_tables for c in t["_columns"]])
+    stats["changed"] = len(changed_tables)
+    stats["changed_tables"] = [t["table_name"] for t in changed_tables]
+    stats["index"] = index_cards(datasource_id, only_tables={t["table_name"] for t in changed_tables})
+    return stats
 
-    stats["index"] = index_cards(datasource_id)
-    logger.info("schema collected: %s", stats)
-    return {**stats, "schema_changed": True}
 
-
-def index_cards(datasource_id: int = 1) -> dict[str, Any]:
-    """表卡片向量索引：全量重建（表数量少，增量 diff 是 M3 范围）。embedding 未配置则跳过。"""
+def index_cards(datasource_id: int = 1, only_tables: set[str] | None = None) -> dict[str, Any]:
+    """表卡片向量索引：默认全量重建；only_tables 定向重建（增量 diff 用）。embedding 未配置则跳过。"""
     from app.db import get_meta_engine
     from app.embedder import get_embedder
     from app.pgstore import upsert_cards
@@ -145,19 +197,22 @@ def index_cards(datasource_id: int = 1) -> dict[str, Any]:
     if not embedder.enabled:
         return {"skipped": "embedding 未配置"}
 
-    ddl = build_schema_prompt(get_meta_engine(), datasource_id)
+    ddl = build_schema_prompt(get_meta_engine(), datasource_id, only_tables=only_tables)
     chunks = [c.strip() for c in ddl.split("\n\n") if c.strip()]
-    # build_schema_prompt 按 table_name 排序输出，块顺序与元库表名顺序一致
-    from sqlalchemy import text as _text
+    if only_tables is not None:
+        table_names = sorted(only_tables)  # build_schema_prompt 按表名排序输出
+    else:
+        # build_schema_prompt 按 table_name 排序输出，块顺序与元库表名顺序一致
+        from sqlalchemy import text as _text
 
-    with get_meta_engine().connect() as conn:
-        table_names = [
-            r[0]
-            for r in conn.execute(
-                _text("SELECT table_name FROM table_meta WHERE datasource_id = :d ORDER BY table_name"),
-                {"d": datasource_id},
-            ).all()
-        ]
+        with get_meta_engine().connect() as conn:
+            table_names = [
+                r[0]
+                for r in conn.execute(
+                    _text("SELECT table_name FROM table_meta WHERE datasource_id = :d ORDER BY table_name"),
+                    {"d": datasource_id},
+                ).all()
+            ]
     if len(table_names) != len(chunks):
         return {"skipped": f"卡片数与表数不一致（{len(chunks)} vs {len(table_names)}），跳过索引"}
 

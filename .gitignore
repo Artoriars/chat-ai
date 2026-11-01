@@ -13,3 +13,6 @@ dist/
 # IDE
 .idea/
 .vscode/
+
+# M3 导出产物
+backend/exports/

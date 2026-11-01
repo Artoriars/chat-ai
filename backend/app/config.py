@@ -39,6 +39,22 @@ class Settings(BaseSettings):
     retrieve_top_k: int = 8
     max_context_tables: int = 12
 
+    # M3: 自愈重试上限（初始生成之外的最大修复次数）
+    max_sql_retries: int = 2
+
+    # M3: Redis（导出队列 / 状态 / QA 去重）
+    redis_url: str = "redis://localhost:16379/0"
+
+    # M3: Excel 导出
+    export_max_rows: int = 5000
+    export_dir: str = ""
+
+    # M3: schema 定时 diff（秒；0=关闭，仅手动/query-time 触发）
+    schema_sync_interval_seconds: int = 0
+
+    # M3: question-SQL 沉淀 dataset（需同时配置 LANGSMITH_API_KEY）
+    langsmith_dataset: str = "chatbi-regression"
+
 
 @lru_cache
 def get_settings() -> Settings:

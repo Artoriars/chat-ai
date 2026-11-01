@@ -94,6 +94,8 @@ def _history_text(turns: list[dict[str, Any]] | None) -> str:
     lines = []
     for i, t in enumerate(turns[-3:], 1):
         line = f"{i}. 问: {t.get('question', '')}"
+        if t.get("clarify"):
+            line += f" | 系统追问: {t['clarify']}"
         if t.get("sql"):
             line += f" | 生成SQL: {t['sql'][:120]}"
         if t.get("error_code"):
@@ -146,6 +148,9 @@ def rewrite_node(state: ChatState) -> ChatState:
         # 不清空则条件边在起点就误判短路，返回过期数据）
         "error_code": None,
         "error": None,
+        # 自愈重试为本轮临时上下文，同样每轮清零
+        "retry_count": 0,
+        "repair_feedback": "",
     }
     if parsed["is_new_topic"]:
         out["tables"] = []  # 重置工作集
@@ -158,6 +163,50 @@ def retrieve_node(state: ChatState) -> ChatState:
     except Exception as e:
         logger.exception("retrieve failed")
         return {"error_code": "RETRIEVE_ERROR", "error": f"检索失败: {e}"}
+
+
+_CLARIFY_PROMPT = """你是 BI 助手的追问生成器。用户的问题太含糊，无法确定查询意图，请生成一条追问。
+
+规则：
+- clarify_question：一条具体、友好的追问，帮用户补充关键信息（想看的指标、维度、时间范围、条数等）。
+- options：2~4 个候选快捷选项，每个不超过 20 字，用户点选即可作为下一轮输入。
+- 只输出一个 JSON 对象，格式：{"clarify_question": "...", "options": ["...", "..."]}"""
+
+
+def _parse_clarify_json(content: str, fallback_question: str) -> dict[str, Any]:
+    m = _JSON_RE.search(content)
+    default = {"question": fallback_question, "options": []}
+    if not m:
+        return default
+    try:
+        obj = json.loads(m.group(0))
+        options = [str(o).strip() for o in (obj.get("options") or []) if str(o).strip()][:4]
+        return {
+            "question": str(obj.get("clarify_question") or fallback_question),
+            "options": options,
+        }
+    except (ValueError, TypeError):
+        return default
+
+
+def clarify_node(state: ChatState) -> ChatState:
+    """问题含糊时生成追问与快捷选项；LLM 失败降级为模板追问，不阻断。"""
+    fallback = f"「{state['question']}」想看什么？请补充具体指标、维度或时间范围。"
+    try:
+        resp = _llm().invoke(
+            [SystemMessage(_CLARIFY_PROMPT), HumanMessage(state["rewritten_query"])]
+        )
+        parsed = _parse_clarify_json(_message_text(resp.content), fallback)
+    except Exception as e:
+        logger.warning("clarify LLM failed, fallback template: %s", e)
+        parsed = {"question": fallback, "options": []}
+    return {
+        "clarify_question": parsed["question"],
+        "clarify_options": parsed["options"],
+        "turns": [{"question": state["question"], "clarify": parsed["question"]}],
+        "error_code": None,
+        "error": None,
+    }
 
 
 def _retrieve_impl(state: ChatState) -> ChatState:
@@ -233,19 +282,135 @@ def validate_node(state: ChatState) -> ChatState:
 def execute_node(state: ChatState) -> ChatState:
     settings = get_settings()
     engine = get_business_engine()
-    with engine.connect() as conn:
-        # EXPLAIN 估算扫描量：取各步骤 rows 估算的最大值（保守判定，宁拒勿漏）
-        explain_rows = conn.execute(text("EXPLAIN " + state["sql"])).mappings().all()
-        estimated = max((int(r.get("rows") or 0) for r in explain_rows), default=0)
-        if estimated > settings.max_explain_rows:
-            return {
-                "error_code": "ROWS_EXCEEDED",
-                "error": f"预估扫描行数 {estimated} 超过阈值 {settings.max_explain_rows}，已拒绝执行",
-            }
-        result = conn.execute(text(state["sql"]))
-        columns = list(result.keys())
-        rows = [list(row) for row in result]
+    try:
+        with engine.connect() as conn:
+            # EXPLAIN 估算扫描量：取各步骤 rows 估算的最大值（保守判定，宁拒勿漏）
+            explain_rows = conn.execute(text("EXPLAIN " + state["sql"])).mappings().all()
+            estimated = max((int(r.get("rows") or 0) for r in explain_rows), default=0)
+            if estimated > settings.max_explain_rows:
+                return {
+                    "error_code": "ROWS_EXCEEDED",
+                    "error": f"预估扫描行数 {estimated} 超过阈值 {settings.max_explain_rows}，已拒绝执行",
+                }
+            result = conn.execute(text(state["sql"]))
+            columns = list(result.keys())
+            rows = [list(row) for row in result]
+    except Exception as e:
+        # 结构化反馈给自愈修复循环；message 保留 MySQL 原始错误（含表/列不存在信号）
+        logger.warning("execute failed: %s", e)
+        return {"error_code": "EXECUTE_ERROR", "error": f"SQL 执行失败: {e}"}
     return {"columns": columns, "rows": rows, "row_count": len(rows)}
+
+
+_REPAIR_PROMPT = """你是 SQL 修复器。下面这条 MySQL SELECT 语句在校验或执行时失败，请根据错误反馈修复它。
+
+规则（必须全部遵守）：
+1. 只修正错误，保持原查询意图不变；若存在指标口径硬约束，禁止改写口径。
+2. 只能使用下方表结构中出现的表和列，禁止编造任何不存在的表、列或函数。
+3. 用户明确指定返回条数时保留对应 LIMIT N，否则不要写 LIMIT（系统会注入默认值）。
+4. 只输出修复后的 SQL 本身，不要输出任何解释或 markdown 代码块。
+
+可用表结构：
+{schema}
+{metric_block}
+
+历史尝试与错误反馈（按时间累积，最后一条是最近失败）：
+{feedback}"""
+
+
+def _needs_schema_refresh(error_code: str, error_msg: str) -> bool:
+    """query-time 兜底触发条件：元库可能落后于业务库真实结构。"""
+    if error_code in ("UNKNOWN_TABLE", "UNKNOWN_COLUMN"):
+        return True
+    if error_code == "EXECUTE_ERROR":
+        return "doesn't exist" in error_msg.lower() or "不存在" in error_msg
+    return False
+
+
+def repair_node(state: ChatState) -> ChatState:
+    """自愈修复循环：累积「尝试+错误」结构化反馈，LLM 只修正错误不改意图。
+
+    库层报表/列不存在时先对涉及表定向刷新元数据（定时同步的 query-time 兜底）再修复。
+    """
+    error_code = state.get("error_code", "")
+    error_msg = state.get("error", "")
+
+    if _needs_schema_refresh(error_code, error_msg) and state.get("tables"):
+        try:
+            from app.collector import refresh_tables
+
+            stats = refresh_tables(1, list(state["tables"]))
+            logger.info("repair 兜底刷新: %s", stats)
+        except Exception as e:
+            logger.warning("repair 兜底刷新失败（继续修复）: %s", e)
+
+    feedback = state.get("repair_feedback", "")
+    entry = (
+        f"尝试 {state.get('retry_count', 0) + 1}\n"
+        f"SQL: {state.get('sql') or '(未生成)'}\n"
+        f"错误({error_code}): {error_msg}"
+    )
+    feedback = f"{feedback}\n\n---\n\n{entry}".strip()
+
+    schema_ddl = build_schema_prompt(get_meta_engine(), only_tables=set(state["tables"]))
+    system = _REPAIR_PROMPT.format(
+        schema=schema_ddl, metric_block=state.get("metric_constraints", ""), feedback=feedback
+    )
+    try:
+        resp = _llm().invoke(
+            [SystemMessage(system), HumanMessage(f"原始问题: {state['rewritten_query']}")]
+        )
+    except Exception as e:
+        logger.warning("repair LLM invoke failed: %s", e)
+        return {"error_code": "LLM_ERROR", "error": f"修复调用失败: {e}", "repair_feedback": feedback}
+    sql = extract_sql(_message_text(resp.content))
+    if not sql:
+        return {
+            "error_code": "EMPTY_SQL",
+            "error": "修复未返回有效 SQL",
+            "repair_feedback": feedback,
+        }
+    # 必须显式清空错误标记（checkpointer 持久化），否则条件边在 validate 前误判短路
+    return {
+        "sql": sql,
+        "retry_count": state.get("retry_count", 0) + 1,
+        "repair_feedback": feedback,
+        "error_code": None,
+        "error": None,
+    }
+
+
+_CONCLUSION_PROMPT = """你是数据分析师。根据用户问题与查询结果，用中文给出简洁的分析结论。
+
+规则：
+- 直接给结论与关键数字，最多 5 条要点；不要复述 SQL；不要编造结果中不存在的数字。
+
+用户问题：{question}
+结果列: {columns}
+结果预览（共 {row_count} 行，下面只展示前 10 行）：
+{rows}"""
+
+
+def _preview_rows(rows: list[list[Any]], max_rows: int = 10, max_cell: int = 80) -> str:
+    """结果集预览文本：行数与单元格长度双重截断，控制结论 prompt 体积。"""
+    lines = []
+    for row in rows[:max_rows]:
+        cells = [str(v)[:max_cell] if v is not None else "NULL" for v in row]
+        lines.append(" | ".join(cells))
+    if len(rows) > max_rows:
+        lines.append(f"...（其余 {len(rows) - max_rows} 行省略）")
+    return "\n".join(lines) or "（查询结果为空）"
+
+
+def _conclusion_text(state: ChatState) -> str:
+    prompt = _CONCLUSION_PROMPT.format(
+        question=state["rewritten_query"],
+        columns=", ".join(state["columns"]),
+        row_count=state["row_count"],
+        rows=_preview_rows(state["rows"]),
+    )
+    resp = _llm().invoke([SystemMessage(prompt), HumanMessage("请输出分析结论")])
+    return _message_text(resp.content).strip()
 
 
 def summarize_node(state: ChatState) -> ChatState:
@@ -258,4 +423,27 @@ def summarize_node(state: ChatState) -> ChatState:
     update: ChatState = {"digest": digest}
     if state.get("sql"):
         update["turns"] = [{"sql": state["sql"], "error_code": state.get("error_code", "")}]
+
+    # 输出路由：conclusion / both → 生成分析结论（失败降级为空串，不阻断结果返回）
+    if state.get("output_signal") in ("conclusion", "both") and "row_count" in state:
+        try:
+            update["conclusion"] = _conclusion_text(state)
+        except Exception as e:
+            logger.warning("结论生成失败（不影响结果返回）: %s", e)
+            update["conclusion"] = ""
+
+    # question-SQL 对沉淀（LangSmith dataset；未配置或失败不阻断主流程）
+    if state.get("sql") and not state.get("error_code"):
+        try:
+            from app.qa_store import record_qa_pair
+
+            record_qa_pair(
+                question=state["question"],
+                sql=state["sql"],
+                session_id=state.get("session_id", ""),
+                healed=state.get("retry_count", 0) > 0,
+                retry_count=state.get("retry_count", 0),
+            )
+        except Exception as e:
+            logger.warning("QA 沉淀失败: %s", e)
     return update

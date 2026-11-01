@@ -60,7 +60,13 @@
   - 多轮会话：PostgresSaver checkpointer（与 pgvector 共用连接池），rewrite 三合一节点（指代消解 rewritten_query / is_new_topic 工作集重置 / output_signal 输出信号）；`POST /api/chat` 传 `session_id` 续聊；
   - 权限预裁剪：`user`（grant_all_tables）+ `user_table_permission`，API `X-User-Id` 头（默认 1=全量授权），检索与 validate 共用权限来源；
   - 实施期修复：派生表别名（`FROM (SELECT...) t`）与 CTE 同等放行；checkpointer 持久化失败状态污染后续轮次 → rewrite 节点每轮开局清空 error 标记；PostgresSaver.setup 需连接池 autocommit（CONCURRENTLY 索引限制）。
-- **M3**：幻觉自愈 bounded 重试 + clarify 降级追问（LangGraph interrupt）；输出路由（结论/明细/Excel 异步导出走 Redis 队列）；schema 增量 diff（定时 + query-time 兜底刷新）；LangSmith datasets 回归评估。
+- **M3（已落地，2026-11-01）**：
+  - 幻觉自愈 bounded 重试：validate/execute 的确定性错误（UNKNOWN_* / PARSE_ERROR / EXECUTE_ERROR / ROWS_EXCEEDED 等）进 repair 节点，结构化反馈（原始 SQL + 错误 + 累积历史尝试）驱动 LLM 只修错误不改口径，上限 `MAX_SQL_RETRIES=2`；execute 节点补 try/except（原先裸抛 500）；query-time 兜底——错误信号为表/列不存在时先对涉及表定向刷新元数据再修复；
+  - clarify 简化状态法（未用 interrupt，KISS）：rewrite 判定含糊 → clarify 节点生成追问 + 2~4 个快捷选项（LLM 失败降级模板追问），追问进 turns 历史，用户回答走下一轮正常 chat；
+  - 输出路由：`output_signal ∈ {conclusion, both}` 时 summarize 节点生成分析结论（预览 10 行 + 单元格截断 80 字符控 token，失败降级不阻断）；Excel 异步导出：`POST /api/export`（SQL 取自会话 checkpoint，不接受客户端传 SQL）→ Redis 队列 → 进程内 worker 线程 → 同源安全检查（权限并入 parse_and_check + EXPLAIN 守卫 + `EXPORT_MAX_ROWS`）→ openpyxl 流式写 → 状态 Redis TTL 1h，`GET /api/export/{id}` 轮询 + `GET /api/export/{id}/download`；
+  - schema 增量 diff：`refresh_tables` 按表级 schema_hash 比对，仅变更表更新元库 + 定向重嵌入卡片（无变化零下游动作）；`POST /api/schema/refresh`（可指定表列表）；定时线程（`SCHEMA_SYNC_INTERVAL_SECONDS`，默认 0=关闭）；query-time 兜底并入 repair 节点；
+  - LangSmith 沉淀 + 回归：成功轮次（含自愈成功对，metadata 标 healed/retry_count）自动写入 dataset `chatbi-regression`（Redis SADD 30 天去重）；`backend/scripts/run_eval.py` 手动跑回归（重跑链路 + 双方执行 + 结果集比对，输出通过率）。
+  - 实施期修复：openpyxl write_only 会整行丢弃全 None 单元格行 → NULL 写空串保行对齐。
 
 ### 基础设施（docker-compose）
 
@@ -110,7 +116,10 @@ backend/
 │   ├── collector.py          # information_schema 采集 → 元库（表级 upsert + 列级重插，幂等）
 │   ├── prompt.py             # 元库记录 → CREATE TABLE DDL 文本
 │   ├── security.py           # sqlglot 静态校验 + LIMIT 注入/钳制
-│   ├── api/                  # /api/schema/collect、/api/chat
-│   └── graph/                # LangGraph：state / nodes / build
+│   ├── api/                  # /api/schema/collect|refresh、/api/chat、/api/export
+│   ├── exporter.py           # M3: Excel 导出（Redis 队列 + 进程内 worker）
+│   ├── qa_store.py           # M3: question-SQL 对沉淀（LangSmith dataset + 去重）
+│   └── graph/                # LangGraph：state / nodes（含 repair/clarify）/ build
+├── scripts/run_eval.py       # M3: LangSmith dataset 回归评估（手动执行）
 └── tests/                    # security、collector 单测（sqlite 内存库隔离）
 ```
