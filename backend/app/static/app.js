@@ -135,7 +135,6 @@ function renderMessages() {
   const box = $("#messages");
   box.innerHTML = "";
   const msgs = currentMsgs();
-  const empty = $("#emptyState");
   if (!msgs.length) {
     box.appendChild(buildEmptyState());
     return;
@@ -178,7 +177,7 @@ function buildAssistantMsg(m) {
   return wrap;
 }
 
-function cardHead(extra = "") {
+function cardHead(m, extra = "") {
   const chips = (m.tables || [])
     .map((t) => `<span class="chip tables">${escapeHtml(t)}</span>`)
     .join("");
@@ -190,7 +189,7 @@ function buildClarifyCard(m) {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML =
-    cardHead(`<span class="chip">需要澄清</span>`) +
+    cardHead(m, `<span class="chip">需要澄清</span>`) +
     `<div class="card-body">
        <div class="clarify-q">${escapeHtml(m.clarify_question)}</div>
        <div class="clarify-opts"></div>
@@ -250,7 +249,7 @@ function buildDataCard(m) {
 
   card.className = "card";
   card.innerHTML =
-    cardHead() +
+    cardHead(m) +
     `<div class="card-body">${conclusionHtml}${tableHtml}${sqlHtml}</div>` +
     `<div class="card-foot">
        <span class="digest">${escapeHtml(m.digest || "")}</span>
