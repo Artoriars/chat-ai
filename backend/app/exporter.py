@@ -21,10 +21,14 @@ STATUS_KEY_PREFIX = "chatbi:export:status:"
 STATUS_TTL_SECONDS = 3600
 
 
-def _redis_client():
+def _redis_client(socket_timeout: int | None = 5):
+    """Redis 客户端。阻塞消费（worker BRPOP）须传 None 关闭 socket 超时，
+    否则阻塞等待时长 >= socket_timeout 时每次都会抛 TimeoutError。"""
     import redis  # 延迟导入：测试环境无 Redis 也能加载模块
 
-    return redis.Redis.from_url(get_settings().redis_url, decode_responses=True, socket_timeout=5)
+    return redis.Redis.from_url(
+        get_settings().redis_url, decode_responses=True, socket_timeout=socket_timeout
+    )
 
 
 def export_dir() -> Path:
@@ -132,7 +136,8 @@ def _run_job(job: dict[str, Any]) -> None:
 def worker_loop(poll_timeout: int = 5) -> None:
     """后台线程主循环：BRPOP 队列，逐个处理。异常只 log，循环不退出。"""
     logger.info("export worker started (queue=%s)", QUEUE_KEY)
-    client = _redis_client()
+    # 阻塞消费专用连接：BRPOP 的 timeout 就是等待机制，不能叠加 socket 超时
+    client = _redis_client(socket_timeout=None)
     while True:
         try:
             item = client.brpop(QUEUE_KEY, timeout=poll_timeout)
