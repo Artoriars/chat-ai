@@ -45,6 +45,8 @@ def chat(req: ChatRequest, x_user_id: int = Header(default=1)) -> dict:
         "output_signal": state.get("output_signal"),
         "rewritten_query": state.get("rewritten_query"),
         "tables": state.get("tables"),
+        # 检索过程明细（向量召回 / 工作集沿用 / join 扩展），与 LangSmith trace 对照用
+        "retrieval_debug": state.get("retrieval_debug"),
         "sql": state["sql"],
         "columns": state["columns"],
         "rows": state["rows"],

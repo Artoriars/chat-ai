@@ -25,6 +25,8 @@ class ChatState(TypedDict, total=False):
     metric_constraints: str
     # 检索输出（跨轮保留：跟进式问题沿用工作集）
     tables: list[str]
+    # 检索过程可观测：LangSmith trace 的 retrieve 节点输出里可见三路来源明细
+    retrieval_debug: dict[str, Any]
     # 生成/校验/执行
     sql: str
     error_code: str

@@ -167,8 +167,10 @@ def _retrieve_impl(state: ChatState) -> ChatState:
         return {"error_code": "PERMISSION_DENIED", "error": "当前用户未授权任何数据表"}
 
     tables: set[str] = set()
+    from_working_set: list[str] = []
     if state.get("tables"):  # 跨轮工作集（跟进式问题优先沿用）
         tables |= set(state["tables"])
+        from_working_set = sorted(state["tables"])
 
     embedder = get_embedder()
     if embedder.enabled:
@@ -177,14 +179,22 @@ def _retrieve_impl(state: ChatState) -> ChatState:
         seeds = search_cards(1, query_vec, settings.retrieve_top_k, allowed_tables=allowed)
         all_tables = _all_table_names()
         edges = build_join_edges(all_tables)
-        tables |= expand_seeds(set(seeds), edges, max_hops=1, max_tables=settings.max_context_tables)
+        expanded = expand_seeds(set(seeds), edges, max_hops=1, max_tables=settings.max_context_tables)
+        tables |= expanded
+        debug = {
+            "mode": "vector",
+            "vector_hits": seeds,
+            "from_working_set": from_working_set,
+            "join_expanded": sorted(expanded - set(seeds) - set(from_working_set)),
+        }
     else:
         # 降级：全量 schema（权限内）
         tables |= allowed if allowed is not None else set(_all_table_names())
+        debug = {"mode": "full_schema_fallback", "vector_hits": [], "from_working_set": from_working_set}
 
     if not tables:
         return {"error_code": "NO_SCHEMA", "error": "未检索到可用表，请先采集表结构"}
-    return {"tables": sorted(tables)}
+    return {"tables": sorted(tables), "retrieval_debug": debug}
 
 
 def _all_table_names() -> dict[str, set[str]]:
