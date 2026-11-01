@@ -17,6 +17,7 @@ dependencies = [
     "cryptography>=42",        # pymysql 连 MySQL8.4 caching_sha2_password 必需
     "sqlglot>=25",
     "pydantic-settings>=2",
+    "python-dotenv>=1.0",      # .env 导出 OS 环境（langsmith 开关依赖）
 ]
 
 [project.optional-dependencies]
